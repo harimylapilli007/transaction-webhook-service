@@ -9,4 +9,10 @@ services:
       - key: PROCESSING_DELAY_SECONDS
         value: "30"
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: transaction-webhook-db
+          property: connectionString
+
+databases:
+  - name: transaction-webhook-db
+    plan: free
