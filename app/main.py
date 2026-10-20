@@ -1,16 +1,18 @@
-import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from app.database import Base, engine, get_db
+from app.database import Base, autocommit_engine, engine, get_db
 from app.models import Transaction
-from app.processor import complete_after_delay, recover_pending_jobs
+from app.processor import recover_pending_jobs, schedule_processing
 from app.schemas import TransactionResponse, TransactionWebhook
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -19,6 +21,9 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # Open the webhook connection now so the first webhook doesn't pay the TLS handshake.
+    with autocommit_engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
     recover_pending_jobs()
     yield
 
@@ -64,26 +69,40 @@ def health_check() -> JSONResponse:
     )
 
 
-@app.post("/v1/webhooks/transactions", status_code=status.HTTP_202_ACCEPTED)
-async def receive_transaction(
-    payload: TransactionWebhook, db: Session = Depends(get_db)
-) -> Response:
-    txn = Transaction(
-        transaction_id=payload.transaction_id,
-        source_account=payload.source_account,
-        destination_account=payload.destination_account,
-        amount=payload.amount,
-        currency=payload.currency,
-        status="PROCESSING",
+def _insert_if_new(payload: TransactionWebhook) -> bool:
+    """Store the webhook as PROCESSING. Returns False if the transaction_id already exists."""
+    # One autocommit statement = one DB round trip, which keeps the 202 fast
+    # even when the database is in a distant region.
+    stmt = (
+        insert(Transaction)
+        .values(
+            transaction_id=payload.transaction_id,
+            source_account=payload.source_account,
+            destination_account=payload.destination_account,
+            amount=payload.amount,
+            currency=payload.currency,
+            status="PROCESSING",
+            created_at=datetime.now(timezone.utc),
+        )
+        .on_conflict_do_nothing(index_elements=["transaction_id"])
+        .returning(Transaction.id)
     )
-    db.add(txn)
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        return Response(status_code=status.HTTP_202_ACCEPTED)
+        with autocommit_engine.connect() as conn:
+            return conn.execute(stmt).first() is not None
+    except DBAPIError as exc:
+        if not exc.connection_invalidated:
+            raise
+    # The pooled connection was dead (e.g. closed by the server while idle); retry on a fresh one.
+    with autocommit_engine.connect() as conn:
+        return conn.execute(stmt).first() is not None
 
-    asyncio.create_task(complete_after_delay(payload.transaction_id))
+
+@app.post("/v1/webhooks/transactions", status_code=status.HTTP_202_ACCEPTED)
+async def receive_transaction(payload: TransactionWebhook) -> Response:
+    # Run the blocking DB write off the event loop so slow commits don't stall other requests.
+    if await run_in_threadpool(_insert_if_new, payload):
+        schedule_processing(payload.transaction_id)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 

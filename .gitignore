@@ -4,10 +4,8 @@ __pycache__/
 .venv/
 venv/
 .env
-data/
 .pytest_cache/
 .coverage
 htmlcov/
 .idea/
 .vscode/
-*.db

@@ -8,11 +8,6 @@ services:
     envVars:
       - key: PROCESSING_DELAY_SECONDS
         value: "30"
+      # Supabase Session pooler URI; set in the Render dashboard, never committed.
       - key: DATABASE_URL
-        fromDatabase:
-          name: transaction-webhook-db
-          property: connectionString
-
-databases:
-  - name: transaction-webhook-db
-    plan: free
+        sync: false

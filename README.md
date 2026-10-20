@@ -18,7 +18,7 @@ Python service that accepts payment-processor webhooks, acknowledges them immedi
 
 Interactive docs: [https://transaction-webhook-service-n8fi.onrender.com/docs](https://transaction-webhook-service-n8fi.onrender.com/docs)
 
-The free Render instance sleeps when idle. The first request after that can take ~30 seconds. Production data is **Render Postgres** (`transaction-webhook-db`). There is no public HTTP URL for the database.
+The free Render instance sleeps when idle. The first request after that can take ~30 seconds. Production data is stored in **Supabase Postgres**.
 
 ## Run locally
 
@@ -33,20 +33,16 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-SQLite is used by default (`./data/transactions.db`). To use Render Postgres from your laptop, copy the **External Database URL** from the Render dashboard Connections tab (never commit it):
+The only database is **Supabase**. Copy `.env.example` to `.env` and set `DATABASE_URL` to your Supabase **Session pooler** connection string (Supabase → Connect → Session pooler). URL-encode special characters in the password (`@` → `%40`). `.env` is gitignored.
 
-```powershell
-$env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST.oregon-postgres.render.com/DBNAME"
-uvicorn app.main:app --reload --port 8000
-```
-
-The app adds `sslmode=require` for Render URLs.
+The app refuses to start without a Supabase `DATABASE_URL`, adds `sslmode=require`, and creates the `transactions` table on startup.
 
 ## Test
 
-Automated (uses SQLite and a 1-second delay):
+Automated (runs against the Supabase database in `.env` with a 1-second delay; test rows use a unique `txn_test_` prefix and are deleted afterwards):
 
 ```bash
+pip install -r requirements-dev.txt
 pytest -q
 ```
 
@@ -70,18 +66,22 @@ Against the **public** API, replace the host with `https://transaction-webhook-s
 
 - **FastAPI + Uvicorn** for a small HTTP layer that can accept webhooks without waiting on the 30s simulated processor.
 - **SQLAlchemy** with a unique constraint on `transaction_id` for persistence and idempotency. Concurrent duplicates fail the insert and are treated as already accepted.
-- **SQLite locally, Render Postgres in production** via `DATABASE_URL` so the same code runs on a laptop and on Render.
+- **Supabase Postgres everywhere** via `DATABASE_URL`, locally and on Render, so there is one database engine and no dev/prod drift. Supabase is used through its Session pooler because the direct connection host is IPv6-only, which Render's free tier can't reach.
 - **Persist first, then schedule work.** The webhook writes a `PROCESSING` row and returns. An asyncio task sleeps 30 seconds, then marks the row `PROCESSED` with `processed_at`.
 - **History UI at `/transactions`.** A small same-origin page lists stored webhooks and refreshes so PROCESSING rows update without a separate frontend host.
+- **Off-loop DB writes.** The webhook handler runs its insert in a worker thread so a slow database commit never blocks other requests on the event loop.
+- **One round trip per webhook.** The insert is a single autocommit `INSERT ... ON CONFLICT (transaction_id) DO NOTHING RETURNING id` on a pre-warmed connection, so the 202 costs one database round trip (~120ms to a remote Supabase region) instead of five. A duplicate returns no row, so it is acknowledged without scheduling a second job.
+- **Retry until stored.** If marking a transaction `PROCESSED` fails (e.g. a DB blip), the job retries with exponential backoff (capped at 60s) instead of silently dying. Task references are held until completion so they can't be garbage-collected mid-flight.
+- **Money as `Decimal`.** Amounts are validated as positive with at most 2 decimal places and stored as `NUMERIC(18,2)`; currency must be a 3-letter code (normalized to upper case). Invalid payloads get `422`.
 - **Startup recovery.** If the process restarts mid-delay, pending `PROCESSING` rows are resumed instead of being lost.
 
 ## Deploy (Render)
 
-`render.yaml` defines a Python web service and a Render Postgres instance named `transaction-webhook-db`. `DATABASE_URL` is taken from that database.
+`render.yaml` defines a Python web service. The database is Supabase.
 
 1. Push this repo to GitHub (public).
 2. In Render, New → Blueprint from `render.yaml`, or a Python Web Service with:
    - Build: `pip install -r requirements.txt`
    - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-3. Attach `transaction-webhook-db` (or let the Blueprint create it).
+3. Set `DATABASE_URL` to the Supabase **Session pooler** connection string (Environment tab).
 4. Set `PROCESSING_DELAY_SECONDS=30`.
