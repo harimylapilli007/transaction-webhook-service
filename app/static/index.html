@@ -84,6 +84,23 @@
       }
       .PROCESSING { background: var(--processing-bg); color: var(--processing); }
       .PROCESSED { background: var(--processed-bg); color: var(--processed); }
+      .response { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 0.85rem; }
+      .response-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; font-size: 0.85rem; }
+      .code { font-weight: 600; }
+      .code.ok { color: var(--processed); }
+      .code.fail { color: #8b1e1e; }
+      .timing { color: var(--muted); font-size: 0.8rem; }
+      .response pre {
+        margin: 0.5rem 0 0;
+        padding: 0.6rem 0.7rem;
+        background: #f7f3ec;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.78rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
       .empty { color: var(--muted); padding: 1.5rem 0; }
       .error { color: #8b1e1e; font-size: 0.85rem; margin-top: 0.5rem; }
     </style>
@@ -109,6 +126,13 @@
         <button type="submit">Accept payment event</button>
         <p class="hint">Same ID posted twice still returns 202 and keeps a single row.</p>
         <p class="error" id="form-error" hidden></p>
+        <div class="response" id="response" hidden>
+          <div class="response-head">
+            <span>POST response: <span class="code" id="response-code"></span></span>
+            <span class="timing" id="response-time"></span>
+          </div>
+          <pre id="response-body"></pre>
+        </div>
       </form>
       <section class="card">
         <div class="toolbar">
@@ -160,6 +184,19 @@
           "</tbody></table>";
       }
 
+      function showResponse(res, text, elapsedMs) {
+        let body = text || "(empty body)";
+        try {
+          body = JSON.stringify(JSON.parse(text), null, 2);
+        } catch (_) {}
+        const code = document.getElementById("response-code");
+        code.textContent = res.status + " " + (res.statusText || (res.status === 202 ? "Accepted" : ""));
+        code.className = "code " + (res.ok ? "ok" : "fail");
+        document.getElementById("response-time").textContent = Math.round(elapsedMs) + " ms";
+        document.getElementById("response-body").textContent = body;
+        document.getElementById("response").hidden = false;
+      }
+
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         formError.hidden = true;
@@ -172,15 +209,15 @@
         };
         form.querySelector("button").disabled = true;
         try {
+          const started = performance.now();
           const res = await fetch("/v1/webhooks/transactions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
-          if (res.status !== 202) {
-            const body = await res.text();
-            throw new Error(body || "Webhook was not accepted");
-          }
+          const text = await res.text();
+          showResponse(res, text, performance.now() - started);
+          if (res.status !== 202) return;
           form.transaction_id.value = "txn_" + Math.random().toString(36).slice(2, 10);
           await loadHistory();
         } catch (err) {

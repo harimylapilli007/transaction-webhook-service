@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
@@ -99,11 +99,19 @@ def _insert_if_new(payload: TransactionWebhook) -> bool:
 
 
 @app.post("/v1/webhooks/transactions", status_code=status.HTTP_202_ACCEPTED)
-async def receive_transaction(payload: TransactionWebhook) -> Response:
+async def receive_transaction(payload: TransactionWebhook) -> JSONResponse:
     # Run the blocking DB write off the event loop so slow commits don't stall other requests.
-    if await run_in_threadpool(_insert_if_new, payload):
+    is_new = await run_in_threadpool(_insert_if_new, payload)
+    if is_new:
         schedule_processing(payload.transaction_id)
-    return Response(status_code=status.HTTP_202_ACCEPTED)
+    return JSONResponse(
+        {
+            "message": "Accepted" if is_new else "Already received",
+            "transaction_id": payload.transaction_id,
+            "duplicate": not is_new,
+        },
+        status_code=status.HTTP_202_ACCEPTED,
+    )
 
 
 @app.get("/v1/transactions")

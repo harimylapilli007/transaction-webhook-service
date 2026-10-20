@@ -12,7 +12,7 @@ Python service that accepts payment-processor webhooks, acknowledges them immedi
 | --- | --- | --- |
 | `GET` | `/` | Health: `{"status":"HEALTHY","current_time":"...Z"}` |
 | `GET` | `/transactions` | Transaction history page |
-| `POST` | `/v1/webhooks/transactions` | Persist as `PROCESSING`, return `202` within 500ms |
+| `POST` | `/v1/webhooks/transactions` | Persist as `PROCESSING`, return `202` within 500ms with `{"message","transaction_id","duplicate"}` |
 | `GET` | `/v1/transactions` | Recent history (newest first, max 100) |
 | `GET` | `/v1/transactions/{transaction_id}` | One-element JSON array with status and timestamps |
 
@@ -68,7 +68,7 @@ Against the **public** API, replace the host with `https://transaction-webhook-s
 - **SQLAlchemy** with a unique constraint on `transaction_id` for persistence and idempotency. Concurrent duplicates fail the insert and are treated as already accepted.
 - **Supabase Postgres everywhere** via `DATABASE_URL`, locally and on Render, so there is one database engine and no dev/prod drift. Supabase is used through its Session pooler because the direct connection host is IPv6-only, which Render's free tier can't reach.
 - **Persist first, then schedule work.** The webhook writes a `PROCESSING` row and returns. An asyncio task sleeps 30 seconds, then marks the row `PROCESSED` with `processed_at`.
-- **History UI at `/transactions`.** A small same-origin page lists stored webhooks and refreshes so PROCESSING rows update without a separate frontend host.
+- **History UI at `/transactions`.** A small same-origin page sends test webhooks, shows the raw POST response (status, latency, body), and lists stored webhooks, refreshing so PROCESSING rows update without a separate frontend host.
 - **Off-loop DB writes.** The webhook handler runs its insert in a worker thread so a slow database commit never blocks other requests on the event loop.
 - **One round trip per webhook.** The insert is a single autocommit `INSERT ... ON CONFLICT (transaction_id) DO NOTHING RETURNING id` on a pre-warmed connection, so the 202 costs one database round trip (~120ms to a remote Supabase region) instead of five. A duplicate returns no row, so it is acknowledged without scheduling a second job.
 - **Retry until stored.** If marking a transaction `PROCESSED` fails (e.g. a DB blip), the job retries with exponential backoff (capped at 60s) instead of silently dying. Task references are held until completion so they can't be garbage-collected mid-flight.

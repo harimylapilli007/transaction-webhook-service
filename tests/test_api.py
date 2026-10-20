@@ -59,6 +59,12 @@ def test_webhook_is_idempotent_and_processes_in_background():
         second = client.post("/v1/webhooks/transactions", json=PAYLOAD)
         assert first.status_code == 202
         assert second.status_code == 202
+        assert first.json() == {
+            "message": "Accepted",
+            "transaction_id": PAYLOAD["transaction_id"],
+            "duplicate": False,
+        }
+        assert second.json()["duplicate"] is True
 
         pending = client.get(f"/v1/transactions/{PAYLOAD['transaction_id']}")
         assert pending.status_code == 200
