@@ -55,6 +55,26 @@ def test_webhook_is_idempotent_and_processes_in_background():
         assert records[0]["currency"] == "INR"
 
 
+def test_transaction_history_list_and_ui():
+    payload = {**PAYLOAD, "transaction_id": "txn_history_1"}
+    with TestClient(app) as client:
+        ui = client.get("/transactions")
+        assert ui.status_code == 200
+        assert "Transaction history" in ui.text
+
+        listed = client.get("/v1/transactions")
+        assert listed.status_code == 200
+        before = len(listed.json())
+
+        assert client.post("/v1/webhooks/transactions", json=payload).status_code == 202
+        history = client.get("/v1/transactions")
+        assert history.status_code == 200
+        rows = history.json()
+        assert len(rows) == before + 1
+        assert rows[0]["transaction_id"] == "txn_history_1"
+        assert rows[0]["status"] == "PROCESSING"
+
+
 def test_webhook_responds_quickly():
     payload = {**PAYLOAD, "transaction_id": "txn_perf_1"}
     with TestClient(app) as client:

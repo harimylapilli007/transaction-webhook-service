@@ -6,10 +6,14 @@ Python service that accepts payment-processor webhooks, acknowledges them immedi
 
 **Public API (Render):** [https://transaction-webhook-service-n8fi.onrender.com](https://transaction-webhook-service-n8fi.onrender.com)
 
+**Transactions history UI:** [https://transaction-webhook-service-n8fi.onrender.com/transactions](https://transaction-webhook-service-n8fi.onrender.com/transactions) (local: `http://localhost:8000/transactions`)
+
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/` | Health: `{"status":"HEALTHY","current_time":"...Z"}` |
+| `GET` | `/transactions` | Transaction history page |
 | `POST` | `/v1/webhooks/transactions` | Persist as `PROCESSING`, return `202` within 500ms |
+| `GET` | `/v1/transactions` | Recent history (newest first, max 100) |
 | `GET` | `/v1/transactions/{transaction_id}` | One-element JSON array with status and timestamps |
 
 Interactive docs: [https://transaction-webhook-service-n8fi.onrender.com/docs](https://transaction-webhook-service-n8fi.onrender.com/docs)
@@ -68,6 +72,7 @@ Against the **public** API, replace the host with `https://transaction-webhook-s
 - **SQLAlchemy** with a unique constraint on `transaction_id` for persistence and idempotency. Concurrent duplicates fail the insert and are treated as already accepted.
 - **SQLite locally, Render Postgres in production** via `DATABASE_URL` so the same code runs on a laptop and on Render.
 - **Persist first, then schedule work.** The webhook writes a `PROCESSING` row and returns. An asyncio task sleeps 30 seconds, then marks the row `PROCESSED` with `processed_at`.
+- **History UI at `/transactions`.** A small same-origin page lists stored webhooks and refreshes so PROCESSING rows update without a separate frontend host.
 - **Startup recovery.** If the process restarts mid-delay, pending `PROCESSING` rows are resumed instead of being lost.
 
 ## Deploy (Render)
