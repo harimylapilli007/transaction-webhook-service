@@ -154,6 +154,16 @@
         return value ? value.replace("T", " ").replace("Z", " UTC") : "—";
       }
 
+      // Webhook fields are caller-controlled, so escape them before building HTML.
+      function esc(value) {
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
       async function loadHistory() {
         const res = await fetch("/v1/transactions");
         if (!res.ok) throw new Error("Could not load history");
@@ -171,13 +181,13 @@
             .map(
               (r) =>
                 "<tr>" +
-                '<td class="mono">' + r.transaction_id + "</td>" +
-                '<td class="mono">' + r.source_account + "</td>" +
-                '<td class="mono">' + r.destination_account + "</td>" +
-                "<td>" + r.amount + " " + r.currency + "</td>" +
-                '<td><span class="badge ' + r.status + '">' + r.status + "</span></td>" +
-                "<td>" + fmt(r.created_at) + "</td>" +
-                "<td>" + fmt(r.processed_at) + "</td>" +
+                '<td class="mono">' + esc(r.transaction_id) + "</td>" +
+                '<td class="mono">' + esc(r.source_account) + "</td>" +
+                '<td class="mono">' + esc(r.destination_account) + "</td>" +
+                "<td>" + esc(r.amount) + " " + esc(r.currency) + "</td>" +
+                '<td><span class="badge ' + esc(r.status) + '">' + esc(r.status) + "</span></td>" +
+                "<td>" + esc(fmt(r.created_at)) + "</td>" +
+                "<td>" + esc(fmt(r.processed_at)) + "</td>" +
                 "</tr>"
             )
             .join("") +
